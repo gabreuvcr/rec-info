@@ -1,12 +1,12 @@
-import sys
 import re
-import resource
-import argparse
+import sys
 import json
 import nltk
+import resource
+import argparse
+from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from nltk.tokenize import RegexpTokenizer
-from nltk.corpus import stopwords
 
 MEGABYTE = 1024 * 1024
 
@@ -26,10 +26,13 @@ def produce_tokens(document: str) -> list[str]:
     nltk.download('punkt', quiet=True)
     nltk.download("stopwords", quiet=True)
     document = document.lower()
+    #Removing all characters except alphabets, numbers,
+    # dot, hyphen and underscore
     document = re.sub(r'[^A-Za-z0-9\.\-\_ ]+', '', document)
     stemmer = PorterStemmer()
     stop_words = set(stopwords.words('english'))
-    tokenizer = RegexpTokenizer(r'\d*\.\d+|[a-zA-Z0-9]+')
+    # Tokenizing the document per alphanumeric and decimals
+    tokenizer = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
     tokens = tokenizer.tokenize(document)
     tokens = [w for w in tokens if not w in stop_words and len(w) >= 2]
     tokens = [stemmer.stem(w) for w in tokens]
