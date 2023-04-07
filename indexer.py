@@ -108,10 +108,6 @@ def main(corpus_path: str, index_dir_path: str) -> None:
         corpus = [json.loads(line) for line in f]
     
     inverted_index = index(corpus[:1])
-    inverted_index = dict(
-        sorted(inverted_index.items(), 
-        key=lambda item: item[0])
-    )
     print(inverted_index)
 
 
