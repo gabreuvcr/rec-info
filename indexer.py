@@ -2,6 +2,7 @@ import re
 import sys
 import json
 import nltk
+import time
 import resource
 import argparse
 from nltk.corpus import stopwords
@@ -26,15 +27,19 @@ def produce_tokens(document: str) -> list[str]:
     nltk.download('punkt', quiet=True)
     nltk.download("stopwords", quiet=True)
     document = document.lower()
+    
     #Removing all characters except alphabets, numbers,
     # dot, hyphen and underscore
     document = re.sub(r'[^A-Za-z0-9\.\-\_ ]+', '', document)
-    stemmer = PorterStemmer()
-    stop_words = set(stopwords.words('english'))
+    
     # Tokenizing the document per alphanumeric and decimals
     tokenizer = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
     tokens = tokenizer.tokenize(document)
-    tokens = [w for w in tokens if not w in stop_words and len(w) >= 2]
+
+    # Removing stop words and stemming the words
+    stemmer = PorterStemmer()
+    stop_words = set(stopwords.words('english'))
+    tokens = [w for w in tokens if not w in stop_words]
     tokens = [stemmer.stem(w) for w in tokens]
     return tokens
 
@@ -72,11 +77,14 @@ def index(corpus: list[dict]) -> dict[str, list[tuple[int, int]]]:
 
 
 def main(corpus_path: str, index_dir_path: str) -> None:
+    start_time = time.time()
     with open(corpus_path, 'r') as f:
         corpus = [json.loads(line) for line in f]
     
     inverted_index = index(corpus[:2])
     print(inverted_index)
+    end_time = time.time()
+    print(f'{end_time - start_time:.4f} seconds')
 
 
 if __name__ == "__main__":
