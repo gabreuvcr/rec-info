@@ -2,7 +2,7 @@
 pa1.pdf
 pa1/
 corpus.jsonl
-
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

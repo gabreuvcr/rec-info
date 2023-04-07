@@ -81,7 +81,7 @@ def produce_token_frequency(raw_tokens: list[str]) -> list[tuple[str, int]]:
     return tokens
 
 
-def tokenize(document: str) -> list[tuple[str, int]]:
+def tokenize(document: dict) -> list[tuple[str, int]]:
     print(document, end="\n\n")
     merged_document = merge_document_fields(document)
     cleared_document = clean_document(merged_document)
@@ -91,7 +91,7 @@ def tokenize(document: str) -> list[tuple[str, int]]:
     return tokens
    
 
-def index(corpus: str) -> dict[str, list[tuple[int, int]]]:
+def index(corpus: list[dict]) -> dict[str, list[tuple[int, int]]]:
     inverted_index = {}
     d_id = 0
     for document in corpus:
