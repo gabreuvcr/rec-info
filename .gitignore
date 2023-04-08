@@ -3,6 +3,7 @@ pa1.pdf
 pa1/
 corpus.jsonl
 .vscode/
+index/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
