@@ -1,42 +1,32 @@
 import re
 import os
-import gc
 import sys
 import json
 import nltk
 import time
-import psutil
 import resource
 import argparse
 import threading
-from queue import Queue
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer
-from nltk.tokenize import word_tokenize
 from nltk.tokenize import RegexpTokenizer
 
-WRITE_ID = 1
-NUM_THREADS = 1
-SENTINEL = object()
-INVERTED_INDEX = {}
+nltk.download('punkt', quiet=True)
+nltk.download("stopwords", quiet=True)
+
 MEGABYTE = 1024 * 1024
-INQUEUE = Queue(maxsize=1_000)
-TEXT_CLEAN_REGEX = r'[^A-Za-z0-9\.\-\_ ]+'
 STOPWORDS = set(stopwords.words('english'))
-SNOWBALL_STEMMER = SnowballStemmer(language='english')
-REGEXP_TOKENIZER = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
+STEMMER = SnowballStemmer(language='english')
+TEXT_CLEAN_REGEX = r'[^A-Za-z0-9\.\-\_ ]+'
+TOKENIZER = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
 
-process = psutil.Process(os.getpid())
-
+INVERTED_INDEX: dict = {}
 
 def memory_limit(value: int):
     limit = value * MEGABYTE
     resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
-
-
-def download_resources(quiet: bool = True):
-    nltk.download('punkt', quiet=quiet)
-    nltk.download("stopwords", quiet=quiet)
 
 
 def merge_document_fields(document: dict) -> str:
@@ -48,13 +38,16 @@ def merge_document_fields(document: dict) -> str:
 
 def produce_tokens(document: str) -> list[str]:
     document = document.lower()
-    # Removing all characters except alphabets, numbers, dot, hyphen and underscore
+    
+    #Removing all characters except alphabets, numbers, dot, hyphen and underscore
     document = re.sub(TEXT_CLEAN_REGEX, '', document)
+    
     # Tokenizing the document per alphanumeric and decimals
-    tokens = REGEXP_TOKENIZER.tokenize(document)
+    tokens = TOKENIZER.tokenize(document)
+
     # Removing stop words and stemming the words
     tokens = [w for w in tokens if not w in STOPWORDS]
-    # tokens = [snowball_stemmer.stem(w) for w in tokens]
+    # tokens = [STEMMER.stem(w) for w in tokens]
     return tokens
 
 
@@ -73,84 +66,46 @@ def produce_token_frequency(raw_tokens: list[str]) -> list[tuple[str, int]]:
 
 def tokenize(document: dict) -> list[tuple[str, int]]:
     merged_document = merge_document_fields(document)
-    raw_tokens = produce_tokens(merged_document)
+    raw_tokens = produce_tokens(merged_document) 
     tokens = produce_token_frequency(raw_tokens)
     return tokens
    
 
-def index(document: dict) -> None:
-    d_id = int(document['id'])
-    for (term, freq) in tokenize(document):
-        if term not in INVERTED_INDEX:
-            INVERTED_INDEX[term] = []
-        INVERTED_INDEX[term] += [(d_id, freq)]
-
-
-def reader(corpus_path: str) -> None:
-    line_count = 0
-    with open(corpus_path, 'r') as corpus_file:
-        for line in corpus_file:
-            if line_count == 100_000: break
-            INQUEUE.put(line)
-            line_count += 1
-    for _ in range(NUM_THREADS):
-        INQUEUE.put(SENTINEL)
-    print('end reader')
-
-
-def write_to_file(index_dir_path: str) -> None:
-    global WRITE_ID
-    # import datetime
-    # print(f"liberando {consumer_id} {datetime.datetime.now()}")
-    with open(f"{index_dir_path}/index_{WRITE_ID}.out", 'w') as index_file:
-        index_file.write(f'{INVERTED_INDEX}')
-        index_file.close()
-        WRITE_ID += 1
-    INVERTED_INDEX.clear()
-    gc.collect()
-
-
-def consumer(memory_limit: int, index_dir_path: str) -> None:
-    # process = psutil.Process(os.getpid())
-    doc_count = 0
-    for line in iter(INQUEUE.get, SENTINEL):
-        document = json.loads(line)
-        index(document)
-        doc_count += 1
-        if doc_count >= 2_000:
-            write_to_file(index_dir_path)
-            doc_count = 0
-    if INVERTED_INDEX:
-        write_to_file(index_dir_path)
-        doc_count = 0
-    print(f'end consumer')
-
+def index(corpus: list[dict], lock: threading.Lock) -> None:
+    global INVERTED_INDEX
+    for document in corpus:
+        d_id = int(document['id'])
+        for (term, freq) in tokenize(document):
+            # with lock:
+            if term not in INVERTED_INDEX:
+                INVERTED_INDEX[term] = []
+            INVERTED_INDEX[term] += [(d_id, freq)]
+ 
 
 def main(corpus_path: str, index_dir_path: str, memory_limit: int) -> None:
-    memory_limit = memory_limit * MEGABYTE
     if not os.path.exists(index_dir_path):
         os.makedirs(index_dir_path)
     
-    download_resources()
-    
     start_time = time.time()
+    with (open(corpus_path, 'r') as corpus_file):
+        i_id = 0
+        lock = threading.Lock()
+        while True:
+            i_id += 1
+            if (i_id == 2): break
 
-    reader_thread = threading.Thread(
-        target=reader, 
-        args=(corpus_path,)
-    )
-    reader_thread.start()
-    consumer_thread = threading.Thread(
-        target=consumer, 
-        args=(memory_limit, index_dir_path,)
-    )
-    consumer_thread.start()
+            corpus_block = corpus_file.readlines(1 * MEGABYTE)
 
-    reader_thread.join()
-    consumer_thread.join()
+            if not corpus_block: break
+            
+            corpus = [json.loads(document) for document in corpus_block]
+            index(corpus, lock)
+            corpus.clear()
 
+            INVERTED_INDEX.clear()
     end_time = time.time()
     print(f'{end_time - start_time:.4f} seconds')
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process some integers.')
@@ -184,7 +139,4 @@ if __name__ == "__main__":
         main(args.corpus_path, args.index_dir_path, args.memory_limit)
     except MemoryError:
         sys.stderr.write('\n\nERROR: Memory Exception\n')
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print(" interrupting...")
         sys.exit(1)

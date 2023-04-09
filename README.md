@@ -18,3 +18,8 @@ where:
 * `-m <MEMORY>`: memory available to the indexer in megabytes.
 * `-c <CORPUS>`: path to the corpus file to be indexed.
 * `-i <INDEX>`: path to the directory where indexes should be written.
+
+example:
+```
+python3 indexer.py -m 1024 -c corpus.jsonl -i index/
+```

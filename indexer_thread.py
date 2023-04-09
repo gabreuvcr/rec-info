@@ -10,33 +10,30 @@ import resource
 import argparse
 import threading
 from queue import Queue
+from collections import defaultdict
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer
 from nltk.tokenize import word_tokenize
 from nltk.tokenize import RegexpTokenizer
 
-WRITE_ID = 1
-NUM_THREADS = 1
-SENTINEL = object()
-INVERTED_INDEX = {}
-MEGABYTE = 1024 * 1024
-INQUEUE = Queue(maxsize=1_000)
-TEXT_CLEAN_REGEX = r'[^A-Za-z0-9\.\-\_ ]+'
-STOPWORDS = set(stopwords.words('english'))
-SNOWBALL_STEMMER = SnowballStemmer(language='english')
-REGEXP_TOKENIZER = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
+nltk.download('punkt', quiet=True)
+nltk.download("stopwords", quiet=True)
 
+NUM_THREADS = 2
+DOC_COUNT = Queue()
+SENTINEL = object()
+MEGABYTE = 1024 * 1024
+INVERTED_INDEX = defaultdict(list)
+
+i_id = 1
+index_lock = threading.Lock()
 process = psutil.Process(os.getpid())
+stop_words = set(stopwords.words('english'))
 
 
 def memory_limit(value: int):
     limit = value * MEGABYTE
     resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
-
-
-def download_resources(quiet: bool = True):
-    nltk.download('punkt', quiet=quiet)
-    nltk.download("stopwords", quiet=quiet)
 
 
 def merge_document_fields(document: dict) -> str:
@@ -47,13 +44,20 @@ def merge_document_fields(document: dict) -> str:
 
 
 def produce_tokens(document: str) -> list[str]:
+    # snowball_stemmer = SnowballStemmer(language='english')
+    text_clean_regex = r'[^A-Za-z0-9\.\-\_ ]+'
+    regexp_tokenizer = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
+
     document = document.lower()
-    # Removing all characters except alphabets, numbers, dot, hyphen and underscore
-    document = re.sub(TEXT_CLEAN_REGEX, '', document)
-    # Tokenizing the document per alphanumeric and decimals
-    tokens = REGEXP_TOKENIZER.tokenize(document)
+
+    # #Removing all characters except alphabets, numbers, dot, hyphen and underscore
+    document = re.sub(text_clean_regex, '', document)
+    
+    # # Tokenizing the document per alphanumeric and decimals
+    tokens = regexp_tokenizer.tokenize(document)
+
     # Removing stop words and stemming the words
-    tokens = [w for w in tokens if not w in STOPWORDS]
+    tokens = [w for w in tokens if not w in stop_words]
     # tokens = [snowball_stemmer.stem(w) for w in tokens]
     return tokens
 
@@ -78,52 +82,56 @@ def tokenize(document: dict) -> list[tuple[str, int]]:
     return tokens
    
 
-def index(document: dict) -> None:
+def index(document: dict, inverted_index: dict) -> None:
     d_id = int(document['id'])
     for (term, freq) in tokenize(document):
-        if term not in INVERTED_INDEX:
-            INVERTED_INDEX[term] = []
-        INVERTED_INDEX[term] += [(d_id, freq)]
+        # if term not in inverted_index:
+        #     inverted_index[term] = []
+        # inverted_index[term] += [(d_id, freq)]
+        INVERTED_INDEX[term].append((d_id, freq))
 
 
-def reader(corpus_path: str) -> None:
+def reader(corpus_path: str, inqueue: Queue) -> None:
     line_count = 0
     with open(corpus_path, 'r') as corpus_file:
         for line in corpus_file:
-            if line_count == 100_000: break
-            INQUEUE.put(line)
             line_count += 1
+            if line_count == 90_000: break
+            inqueue.put(line)
     for _ in range(NUM_THREADS):
-        INQUEUE.put(SENTINEL)
+        inqueue.put(SENTINEL)
     print('end reader')
 
-
-def write_to_file(index_dir_path: str) -> None:
-    global WRITE_ID
-    # import datetime
-    # print(f"liberando {consumer_id} {datetime.datetime.now()}")
-    with open(f"{index_dir_path}/index_{WRITE_ID}.out", 'w') as index_file:
+def write_to_file(index_dir_path: str, consumer_id: int, inverted_index: dict) -> None:
+    import datetime
+    global i_id
+    print(f"liberando {consumer_id} {datetime.datetime.now()}")
+    with open(f"{index_dir_path}/index_{i_id}.out", 'w') as index_file:
         index_file.write(f'{INVERTED_INDEX}')
         index_file.close()
-        WRITE_ID += 1
+        i_id += 1
     INVERTED_INDEX.clear()
-    gc.collect()
+    # gc.collect()
 
 
-def consumer(memory_limit: int, index_dir_path: str) -> None:
-    # process = psutil.Process(os.getpid())
-    doc_count = 0
-    for line in iter(INQUEUE.get, SENTINEL):
+def consumer(inqueue: Queue, memory_limit: int, index_dir_path: str, id: int) -> None:
+    global INVERTED_INDEX
+    process = psutil.Process(os.getpid())
+    inverted_index = {}
+    for line in iter(inqueue.get, SENTINEL):
         document = json.loads(line)
-        index(document)
-        doc_count += 1
-        if doc_count >= 2_000:
-            write_to_file(index_dir_path)
-            doc_count = 0
-    if INVERTED_INDEX:
-        write_to_file(index_dir_path)
-        doc_count = 0
-    print(f'end consumer')
+        index(document, inverted_index)
+        with index_lock:
+            DOC_COUNT.put(True)
+            print(DOC_COUNT.qsize(), process.memory_info().rss / MEGABYTE)
+            if DOC_COUNT.qsize() >= 2_000:
+                write_to_file(index_dir_path, id, inverted_index)
+                DOC_COUNT.queue.clear()
+    with index_lock:
+        if INVERTED_INDEX:
+            write_to_file(index_dir_path, id, inverted_index)
+    DOC_COUNT.queue.clear()
+    print(f'end consumer {id}')
 
 
 def main(corpus_path: str, index_dir_path: str, memory_limit: int) -> None:
@@ -131,23 +139,21 @@ def main(corpus_path: str, index_dir_path: str, memory_limit: int) -> None:
     if not os.path.exists(index_dir_path):
         os.makedirs(index_dir_path)
     
-    download_resources()
+    inqueue = Queue(maxsize=50)
     
     start_time = time.time()
 
-    reader_thread = threading.Thread(
-        target=reader, 
-        args=(corpus_path,)
-    )
+    reader_thread = threading.Thread(target=reader, args=(corpus_path, inqueue))
     reader_thread.start()
-    consumer_thread = threading.Thread(
-        target=consumer, 
-        args=(memory_limit, index_dir_path,)
-    )
-    consumer_thread.start()
+    consumers: list[threading.Thread] = []
+    for i in range(NUM_THREADS):
+        c = threading.Thread(target=consumer, args=(inqueue, memory_limit, index_dir_path, i + 1))
+        consumers += [c]
+        c.start()
 
     reader_thread.join()
-    consumer_thread.join()
+    for c in consumers:
+        c.join()
 
     end_time = time.time()
     print(f'{end_time - start_time:.4f} seconds')
