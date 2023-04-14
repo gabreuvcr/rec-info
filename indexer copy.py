@@ -18,13 +18,16 @@ from nltk.tokenize import RegexpTokenizer
 MEGABYTE = 1024 * 1024
 SENTINEL = object()
 
-num_threads = 3
+num_threads = 2
+inverted_index = {}
+write_id = 1
+doc_count = 0
 lock = Lock()
 doc_queue = Queue(maxsize=1_000)
 stop_words = set(stopwords.words('english'))
 snowball_stemmer = SnowballStemmer(language='english')
 regexp_tokenizer = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
-# process = psutil.Process(os.getpid())
+process = psutil.Process(os.getpid())
 
 def memory_limit(value: int):
     limit = value * MEGABYTE
@@ -76,9 +79,10 @@ def tokenize(document: dict) -> list[tuple[str, int]]:
     return tokens
    
 
-def index(document: dict, inverted_index: dict) -> None:
+def index(document: dict) -> None:
     d_id = int(document['id'])
     for (term, freq) in tokenize(document):
+        # with lock:
         if term not in inverted_index:
             inverted_index[term] = []
         inverted_index[term] += [(d_id, freq)]
@@ -88,7 +92,7 @@ def reader(corpus_path: str) -> None:
     line_count = 0
     with open(corpus_path, 'r') as corpus_file:
         for line in corpus_file:
-            if line_count == 100_000: break
+            if line_count == 10_000: break
             document = json.loads(line)
             doc_queue.put(document)
             line_count += 1
@@ -97,28 +101,28 @@ def reader(corpus_path: str) -> None:
     print('end reader')
 
 
-def write_to_file(
-        index_dir_path: str, 
-        inverted_index: dict, 
-        consumer_id: int, 
-        doc_count: int
-    ) -> None:
-    with open(f"{index_dir_path}/index_{consumer_id}_{doc_count}.txt", 'w') as index_file:
+def write_to_file(index_dir_path: str) -> None:
+    global write_id
+    with open(f"{index_dir_path}/index_{write_id}.txt", 'w') as index_file:
         index_file.write(f'{inverted_index}')
+    write_id += 1
     inverted_index.clear()
 
 
 def consumer(index_dir_path: str, id: int) -> None:
-    inverted_index = {}
-    doc_count = 0
+    global doc_count
     for document in iter(doc_queue.get, SENTINEL):
-        index(document, inverted_index)
-        doc_count += 1
-        if doc_count == 5_000:
-            with lock: write_to_file(index_dir_path, inverted_index, id, doc_count)
+        with lock:
+            index(document)
+            doc_count += 1
+            if doc_count == 10_000:
+                write_to_file(index_dir_path)
+                doc_count = 0
+    with lock:
+        if inverted_index:
+            # print(inverted_index)
+            write_to_file(index_dir_path)
             doc_count = 0
-    if inverted_index:
-        with lock: write_to_file(index_dir_path, inverted_index, id, doc_count)
     print(f'end consumer {id}')
 
 
