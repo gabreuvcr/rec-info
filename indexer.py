@@ -1,6 +1,5 @@
 import re
 import os
-import gc
 import sys
 import json
 import nltk
@@ -8,6 +7,7 @@ import time
 import psutil
 import resource
 import argparse
+import unicodedata
 from queue import Queue
 from threading import Thread, Lock
 from nltk.corpus import stopwords
@@ -15,12 +15,14 @@ from nltk.stem import SnowballStemmer
 # from nltk.tokenize import word_tokenize
 from nltk.tokenize import RegexpTokenizer
 
+NUM_THREADS = 3
 MEGABYTE = 1024 * 1024
 SENTINEL = object()
+LINE_LIMIT = 10_000
+DOC_LIMIT = 1_000
 
-num_threads = 3
 lock = Lock()
-doc_queue = Queue(maxsize=1_000)
+doc_queue = Queue(maxsize=5_000)
 stop_words = set(stopwords.words('english'))
 snowball_stemmer = SnowballStemmer(language='english')
 regexp_tokenizer = RegexpTokenizer(r'\d+\.\d+|[a-zA-Z0-9]+')
@@ -43,13 +45,23 @@ def merge_document_fields(document: dict) -> str:
     return merged_document
 
 
+def remove_accents(document: str):
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', document)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+
 def produce_tokens(document: str) -> list[str]:
-    document = document.lower()
+    document = document.casefold()
+    document = remove_accents(document)
     # Removing all characters except alphabets, numbers, dot, hyphen and underscore
     clean_text_regex = r'[^A-Za-z0-9\.\-\_ ]+'
     document = re.sub(clean_text_regex, '', document)
+    
     # Tokenizing the document per alphanumeric and decimals
     tokens = regexp_tokenizer.tokenize(document)
+    
     # Removing stop words and stemming the words
     tokens = [w for w in tokens if not w in stop_words]
     # tokens = [snowball_stemmer.stem(w) for w in tokens]
@@ -88,11 +100,11 @@ def reader(corpus_path: str) -> None:
     line_count = 0
     with open(corpus_path, 'r') as corpus_file:
         for line in corpus_file:
-            if line_count == 100_000: break
+            if line_count == LINE_LIMIT: break
             document = json.loads(line)
             doc_queue.put(document)
             line_count += 1
-    for _ in range(num_threads):
+    for _ in range(NUM_THREADS):
         doc_queue.put(SENTINEL)
     print('end reader')
 
@@ -114,11 +126,10 @@ def consumer(index_dir_path: str, id: int) -> None:
     for document in iter(doc_queue.get, SENTINEL):
         index(document, inverted_index)
         doc_count += 1
-        if doc_count == 5_000:
-            with lock: write_to_file(index_dir_path, inverted_index, id, doc_count)
-            doc_count = 0
+        if doc_count % DOC_LIMIT == 0:
+            write_to_file(index_dir_path, inverted_index, id, doc_count)
     if inverted_index:
-        with lock: write_to_file(index_dir_path, inverted_index, id, doc_count)
+        write_to_file(index_dir_path, inverted_index, id, doc_count)
     print(f'end consumer {id}')
 
 
@@ -137,7 +148,7 @@ def main(corpus_path: str, index_dir_path: str, memory_limit: int) -> None:
     )
     reader_thread.start()
     consumers_thread: list[Thread] = []
-    for t in range(num_threads):
+    for t in range(NUM_THREADS):
         consumers_thread += [
             Thread(
                 target=consumer, 
@@ -147,7 +158,7 @@ def main(corpus_path: str, index_dir_path: str, memory_limit: int) -> None:
         consumers_thread[t].start()
 
     reader_thread.join()
-    for t in range(num_threads):
+    for t in range(NUM_THREADS):
         consumers_thread[t].join()
 
     end_time = time.time()
