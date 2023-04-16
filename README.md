@@ -21,5 +21,6 @@ where:
 
 example:
 ```
+rm -rf index/ && python3 indexer.py -m 1024 -c corpus.jsonl -i index/
 python3 indexer.py -m 1024 -c corpus.jsonl -i index/
 ```
