@@ -1,5 +1,6 @@
 import os
 import time
+import shutil
 
 def merge_two_indexes(path_index_a, path_index_b, path_merged_index):
     def parse_torken_postings(line):
@@ -49,7 +50,7 @@ def merge_two_indexes(path_index_a, path_index_b, path_merged_index):
 
 def merge_partial_indexes(index_dir_path: str) -> None:
     start_time = time.time()
-    index_files = os.listdir(index_dir_path)
+    index_files = os.listdir(f'{index_dir_path}/tmp')
     merged_file = ''
     if len(index_files) >= 2:
         for i in range(len(index_files) - 1):
@@ -57,15 +58,15 @@ def merge_partial_indexes(index_dir_path: str) -> None:
             index_b = index_files[i + 1]
             merged_file = f'merged_{i + 1}.txt'
             merge_two_indexes(
-                f'{index_dir_path}/{index_a}',
-                f'{index_dir_path}/{index_b}',
-                f'{index_dir_path}/{merged_file}',
+                f'{index_dir_path}/tmp/{index_a}',
+                f'{index_dir_path}/tmp/{index_b}',
+                f'{index_dir_path}/tmp/{merged_file}',
             )
-            os.remove(f'{index_dir_path}/{index_a}')
-            os.remove(f'{index_dir_path}/{index_b}')
             index_files[i + 1] = merged_file
     else:
         merged_file = index_files[0]
-    os.rename(f'{index_dir_path}/{merged_file}', f'{index_dir_path}/inverted_index.txt')
+    
+    os.rename(f'{index_dir_path}/tmp/{merged_file}', f'{index_dir_path}/inverted_index.txt')
+    shutil.rmtree(f'{index_dir_path}/tmp')
     end_time = time.time()
     print(f'Merge time: {end_time - start_time:.2f} seconds')

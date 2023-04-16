@@ -3,7 +3,6 @@ import os
 import json
 import nltk
 import time
-import resource
 import unicodedata
 from queue import Queue
 from threading import Thread
@@ -16,16 +15,16 @@ MEGABYTE = 1024 * 1024
 SENTINEL = object()
 
 NUM_THREADS = 3
-LINE_LIMIT = 10_000
+LINE_LIMIT = 3_000
 DOC_LIMIT = 1_000
 
 # NUM_THREADS = 2
 # LINE_LIMIT = 100
 # DOC_LIMIT = 50
 
-doc_queue = Queue(maxsize=5_000)
-stop_words = set(stopwords.words('english'))
-snowball_stemmer = SnowballStemmer(language='english')
+DOC_QUEUE = Queue(maxsize=5_000)
+STOP_WORDS = set(stopwords.words('english'))
+SNOWBALL_STEMMER = SnowballStemmer(language='english')
 # process = psutil.Process(os.getpid())
 
 
@@ -55,14 +54,27 @@ def clean_text(document: str) -> str:
     return cleaned_document
 
 
+def split_alphanumeric(token):
+    regex = r'(\d+|[a-zA-Z]+)'
+    return re.findall(regex, token)
+
+
 def produce_tokens(document: str) -> list[tuple[str, int]]:
     cleaned_document = clean_text(document)
     tokens = word_tokenize(cleaned_document)
     
-    # Removing stop words and stemming the words
-    tokens = [token for token in tokens if not token in stop_words]
-    # tokens = [snowball_stemmer.stem(token) for token in tokens]
+    # Handling numbers
+    # tokens = [token for token in tokens if token.isalpha()]
+    tokens = [t for tokens in tokens for t in split_alphanumeric(tokens)]
+    tokens = [str(int(token)) if token.isnumeric() else token for token in tokens]
 
+    # Removing stop words
+    tokens = [token for token in tokens if not token in STOP_WORDS]
+
+    # Stemming the words
+    # tokens = [SNOWBALL_STEMMER.stem(token) for token in tokens]
+
+    # Counting the frequency of each token
     tokens_frequency = {}
     for token in tokens:
         tokens_frequency[token] = tokens_frequency.get(token, 0) + 1
@@ -91,10 +103,10 @@ def reader(corpus_path: str) -> None:
         for line in corpus_file:
             if line_count == LINE_LIMIT: break
             document = json.loads(line)
-            doc_queue.put(document)
+            DOC_QUEUE.put(document)
             line_count += 1
     for _ in range(NUM_THREADS):
-        doc_queue.put(SENTINEL)
+        DOC_QUEUE.put(SENTINEL)
     print('end reader')
 
 
@@ -104,7 +116,9 @@ def write_to_file(
         consumer_id: int, 
         doc_count: int
     ) -> None:
-    with open(f"{index_dir_path}/index_{consumer_id}_{doc_count}.txt", 'w') as index_file:
+    if not os.path.exists(f"{index_dir_path}/tmp"):
+        os.makedirs(f"{index_dir_path}/tmp")
+    with open(f"{index_dir_path}/tmp/index_{consumer_id}_{doc_count}.txt", 'w') as index_file:
         for token in sorted(inverted_index):
             index_file.write(f'{token}|')
             for i in range(len(inverted_index[token])):
@@ -120,7 +134,7 @@ def write_to_file(
 def consumer(index_dir_path: str, id: int) -> None:
     inverted_index = {}
     doc_count = 0
-    for document in iter(doc_queue.get, SENTINEL):
+    for document in iter(DOC_QUEUE.get, SENTINEL):
         index(document, inverted_index)
         doc_count += 1
         if doc_count % DOC_LIMIT == 0:
@@ -157,7 +171,7 @@ def produce_partial_indexes(corpus_path: str, index_dir_path: str) -> None:
     end_time = time.time()
 
     print(f'Index time: {end_time - start_time:.2f} seconds')
-    
+
 
 def produce_index(corpus_path: str, index_dir_path: str) -> None:
     start_time = time.time()
