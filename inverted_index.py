@@ -15,7 +15,7 @@ MEGABYTE = 1024 * 1024
 SENTINEL = object()
 
 NUM_THREADS = 3
-LINE_LIMIT = 3_000
+LINE_LIMIT = 10_000
 DOC_LIMIT = 1_000
 
 # NUM_THREADS = 2
@@ -174,8 +174,12 @@ def produce_partial_indexes(corpus_path: str, index_dir_path: str) -> None:
 
 
 def produce_index(corpus_path: str, index_dir_path: str) -> None:
+    if index_dir_path[-1] == '/': index_dir_path = index_dir_path[:-1]
+    
     start_time = time.time()
+    
     produce_partial_indexes(corpus_path, index_dir_path)
     merge_partial_indexes(index_dir_path)
+    
     end_time = time.time()
     print(f'Elapsed time: {end_time - start_time:.2f} seconds')
