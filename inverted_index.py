@@ -157,15 +157,15 @@ def produce_partial_indexes(corpus_path: str, index_dir_path: str) -> None:
         args=(corpus_path,)
     )
     reader_thread.start()
-    consumers_thread = [
+    consumer_threads = [
         Thread(target=consumer, args=(index_dir_path, i + 1))
         for i in range(NUM_THREADS)
     ]
-    for consumer_thread in consumers_thread:
+    for consumer_thread in consumer_threads:
         consumer_thread.start()
     
     reader_thread.join()
-    for consumer_thread in consumers_thread:
+    for consumer_thread in consumer_threads:
         consumer_thread.join()
 
     end_time = time.time()
